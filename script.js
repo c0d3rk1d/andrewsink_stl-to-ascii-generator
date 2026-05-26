@@ -270,15 +270,53 @@ stlLoader.load(
 document.getElementById('screenshotButton').addEventListener('click', takeScreenshot);
 
 function takeScreenshot() {
-    // Capture only the ASCII canvas, not the entire page
     html2canvas(effect.domElement).then(function (canvas) {
-        var link = document.createElement("a");
+        // Scan pixels to find the bounding box of actual ASCII content
+        const ctx = canvas.getContext('2d');
+        const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+        const threshold = 20;
+
+        let minX = canvas.width, maxX = 0, minY = canvas.height, maxY = 0;
+
+        for (let y = 0; y < canvas.height; y++) {
+            for (let x = 0; x < canvas.width; x++) {
+                const i = (y * canvas.width + x) * 4;
+                const r = data[i], g = data[i + 1], b = data[i + 2];
+                const isContent = isDarkMode
+                    ? (r > threshold || g > threshold || b > threshold)
+                    : (r < 255 - threshold || g < 255 - threshold || b < 255 - threshold);
+                if (isContent) {
+                    if (x < minX) minX = x;
+                    if (x > maxX) maxX = x;
+                    if (y < minY) minY = y;
+                    if (y > maxY) maxY = y;
+                }
+            }
+        }
+
+        // Add 20% margin around the content
+        const contentW = maxX - minX + 1;
+        const contentH = maxY - minY + 1;
+        const marginX = Math.round(contentW * 0.2);
+        const marginY = Math.round(contentH * 0.2);
+
+        const cropX = Math.max(0, minX - marginX);
+        const cropY = Math.max(0, minY - marginY);
+        const cropW = Math.min(canvas.width - cropX, contentW + 2 * marginX);
+        const cropH = Math.min(canvas.height - cropY, contentH + 2 * marginY);
+
+        // Draw cropped region into a new canvas
+        const out = document.createElement('canvas');
+        out.width = cropW;
+        out.height = cropH;
+        out.getContext('2d').drawImage(canvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+
+        const link = document.createElement('a');
+        link.download = 'ASCII.jpg';
+        link.href = out.toDataURL('image/jpeg');
         document.body.appendChild(link);
-        link.download = "ASCII.jpg";
-        link.href = canvas.toDataURL("image/jpg");
-        console.log(link.href);
-        // link.target = '_blank';
         link.click();
+        document.body.removeChild(link);
     });
 }
 
