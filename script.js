@@ -251,6 +251,7 @@ function getMergedGeometryFromGLB(root) {
 function loadSTLFromArrayBuffer(arrayBuffer) {
     const geometry = stlLoader.parse(arrayBuffer);
     applyGeometryToMesh(geometry, {
+        updateCamera: true,
         rotation: {
             x: -90 * Math.PI / 180,
             y: 0,
