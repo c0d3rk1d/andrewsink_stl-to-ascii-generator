@@ -274,6 +274,7 @@ function loadGLBFromArrayBuffer(arrayBuffer) {
         }
 
         applyGeometryToMesh(geometry, {
+            updateCamera: true,
             rotation: {
                 x: 0,
                 y: 0,
