@@ -4,6 +4,16 @@ let isDarkMode = true
 //Create a clock for rotation
 const clock = new THREE.Clock()
 
+// Render-on-demand: tick() skips effect.render() unless something changed
+let needsRender = true
+function requestRender() {
+    needsRender = true
+}
+
+// Animation speeds (per second, so speed is independent of display refresh rate)
+const MODEL_ROTATION_SPEED = 0.6 // radians per second
+const LIGHT_ROTATION_SPEED = 60 // degrees per second
+
 // Set rotate boolean variable
 let rotateModel = {
     x: false,
@@ -153,8 +163,12 @@ function updateViewOffset() {
 // Create and configure orbit controls
 function createOrbitControls() {
     const prevTarget = controls ? controls.target.clone() : new THREE.Vector3();
+    if (controls) {
+        controls.dispose();
+    }
     controls = new THREE.OrbitControls(camera, effect.domElement);
     controls.target.copy(prevTarget);
+    controls.addEventListener('change', requestRender);
 
     // Configure orbit controls for smoother interaction
     controls.enableDamping = true; // Add smooth damping
@@ -199,6 +213,11 @@ function applyGeometryToMesh(geometry, options = {}) {
     defaultRotation = { ...rotation };
     defaultRotationDegrees = { ...rotationDegrees };
 
+    // Free GPU buffers held by the previous model before swapping it out
+    if (myMesh.geometry && myMesh.geometry !== geometry) {
+        myMesh.geometry.dispose();
+    }
+
     myMesh.material = material;
     myMesh.geometry = geometry;
 
@@ -218,6 +237,7 @@ function applyGeometryToMesh(geometry, options = {}) {
     }
 
     scene.add(myMesh);
+    requestRender();
 }
 
 // Flatten all meshes in a GLB into one geometry so the existing ASCII pipeline works.
@@ -353,36 +373,42 @@ stlLoader.load(
         updateViewOffset()
 
         function tick() {
+            // Clamp delta so a backgrounded tab doesn't cause a huge jump on return
+            const delta = Math.min(clock.getDelta(), 0.1);
+
             if (rotateModel.x) {
-                myMesh.rotation.x += 0.01;
+                myMesh.rotation.x += MODEL_ROTATION_SPEED * delta;
+                requestRender();
             }
 
             if (rotateModel.y) {
-                myMesh.rotation.y += 0.01;
+                myMesh.rotation.y += MODEL_ROTATION_SPEED * delta;
+                requestRender();
             }
 
             if (rotateModel.z) {
-                myMesh.rotation.z += 0.01;
+                myMesh.rotation.z += MODEL_ROTATION_SPEED * delta;
+                requestRender();
             }
 
             if (rotateLight) {
-                const lightSlider = document.getElementById('lightSlider');
-                let currentAngle = parseFloat(lightSlider.value);
-                currentAngle = (currentAngle + 1) % 360;
-                lightSlider.value = currentAngle;
-                // Manually trigger the input event to update the light's position
-                lightSlider.dispatchEvent(new Event('input'));
+                lightAngle = (lightAngle + LIGHT_ROTATION_SPEED * delta) % 360;
+                lightSliderEl.value = lightAngle;
+                updateLightPosition();
             }
 
-            // Update controls for smooth damping
-            controls.update();
+            // Update controls for smooth damping; returns true while the camera is still moving
+            if (controls.update()) {
+                requestRender();
+            }
 
-            render()
+            // Only pay for the ASCII conversion when something actually changed
+            if (needsRender) {
+                needsRender = false;
+                effect.render(scene, camera);
+            }
+
             window.requestAnimationFrame(tick)
-        }
-
-        function render() {
-            effect.render(scene, camera);
         }
 
         tick()
@@ -460,6 +486,7 @@ function updateASCII() {
     document.body.appendChild(effect.domElement)
 
     createOrbitControls()
+    requestRender()
 
 }
 
@@ -477,6 +504,7 @@ function resetASCII() {
     document.body.appendChild(effect.domElement)
 
     createOrbitControls()
+    requestRender()
 }
 
 document.getElementById('lightDark').addEventListener('click', lightDark);
@@ -500,35 +528,38 @@ function lightDark() {
     effect.setSize(window.innerWidth, window.innerHeight);
     document.body.appendChild(effect.domElement);
     createOrbitControls();
+    requestRender();
 }
 
-document.getElementById('lightSlider').addEventListener('input', function (e) {
-    const angleDeg = parseFloat(e.target.value);
-    const angleRad = angleDeg * Math.PI / 180;
-    const radius = myMesh.geometry.boundingBox.max.z * 2; // Distance from origin, similar to initial position
+// Light state lives in variables; sliders are just inputs/reflections of it,
+// so the animation loop never has to read or dispatch DOM events.
+const lightSliderEl = document.getElementById('lightSlider');
+const lightHeightSliderEl = document.getElementById('lightHeightSlider');
+let lightAngle = parseFloat(lightSliderEl.value);
+let lightHeightMultiplier = parseFloat(lightHeightSliderEl.value);
 
-    // Get height from the height slider
-    const heightSlider = document.getElementById('lightHeightSlider');
-    const heightMultiplier = parseFloat(heightSlider.value);
-
-    // Calculate height based on bounding box
-    let height = 85; // Default height
-    if (myMesh.geometry.boundingBox) {
-        const bbox = myMesh.geometry.boundingBox;
-        const bboxHeight = bbox.max.y - bbox.min.y;
-        height = bboxHeight * heightMultiplier;
+function updateLightPosition() {
+    const bbox = myMesh.geometry.boundingBox;
+    if (!bbox) {
+        return;
     }
 
-    // Calculate new position in XZ plane
-    const x = Math.cos(angleRad) * radius;
-    const z = Math.sin(angleRad) * radius;
-    pointLight1.position.set(x, height, z);
-    // pointLight2.position.set(-x, -y, -z);
+    const angleRad = lightAngle * Math.PI / 180;
+    const radius = bbox.max.z * 2; // Distance from origin, similar to initial position
+    const height = (bbox.max.y - bbox.min.y) * lightHeightMultiplier;
+
+    pointLight1.position.set(Math.cos(angleRad) * radius, height, Math.sin(angleRad) * radius);
+    requestRender();
+}
+
+lightSliderEl.addEventListener('input', function (e) {
+    lightAngle = parseFloat(e.target.value);
+    updateLightPosition();
 });
 
-document.getElementById('lightHeightSlider').addEventListener('input', function (e) {
-    // Trigger the light slider to update position with new height
-    document.getElementById('lightSlider').dispatchEvent(new Event('input'));
+lightHeightSliderEl.addEventListener('input', function (e) {
+    lightHeightMultiplier = parseFloat(e.target.value);
+    updateLightPosition();
 });
 
 
@@ -539,6 +570,7 @@ function onWindowResize() {
     updateViewOffset();
     renderer.setSize(window.innerWidth, window.innerHeight);
     effect.setSize(window.innerWidth, window.innerHeight);
+    requestRender();
 }
 
 function download(filename, text) {
@@ -574,6 +606,7 @@ document.getElementById("clipboardASCII").addEventListener("click", function () 
 document.getElementById('scaleSlider').addEventListener('input', function (e) {
     const scale = parseFloat(e.target.value);
     myMesh.scale.set(scale, scale, scale);
+    requestRender();
 });
 
 // Rotation sliders logic
@@ -586,6 +619,7 @@ document.getElementById('scaleSlider').addEventListener('input', function (e) {
         } else {
             myMesh.rotation[axis.toLowerCase()] = value;
         }
+        requestRender();
     });
 });
 
@@ -621,13 +655,11 @@ function resetPositions() {
     document.getElementById('rotateXSlider').value = defaultRotationDegrees.x;
     document.getElementById('rotateYSlider').value = defaultRotationDegrees.y;
     document.getElementById('rotateZSlider').value = defaultRotationDegrees.z;
-    document.getElementById('lightSlider').value = 45;
-    document.getElementById('lightHeightSlider').value = 2;
-
-    // Reset light position
-    if (myMesh.geometry.boundingBox) {
-        document.getElementById('lightSlider').dispatchEvent(new Event('input'));
-    }
+    lightAngle = 45;
+    lightHeightMultiplier = 2;
+    lightSliderEl.value = lightAngle;
+    lightHeightSliderEl.value = lightHeightMultiplier;
+    updateLightPosition();
 
 
     // Stop rotations
@@ -639,6 +671,7 @@ function resetPositions() {
     rotateLight = isMobileDevice;
     updateRotateLightButtonUI();
     updateRotateModelButtonUI();
+    requestRender();
 }
 
 document.getElementById('mobile-menu-button').addEventListener('click', function () {
